@@ -1,0 +1,22 @@
+# Updates Windows System Registry Key to force redirect Windows system to check in with WSUS server
+
+# WSUS server URL
+$wsusServer = "http://[wsus-server]:8530"  # Replace with your WSUS server URL
+
+# Set WSUS server configuration
+$wsusRegistryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+$wsusRegistryName = "WUServer"
+$wsusRegistryPortName = "WUStatusServer"
+
+# Set WSUS server URL
+New-Item -Path $wsusRegistryPath -Force | Out-Null
+Set-ItemProperty -Path $wsusRegistryPath -Name $wsusRegistryName -Value $wsusServer
+
+# Set WSUS server status URL
+Set-ItemProperty -Path $wsusRegistryPath -Name $wsusRegistryPortName -Value $wsusServer
+
+# Force a detection
+$automaticUpdates = New-Object -ComObject "Microsoft.Update.AutoUpdate"
+$automaticUpdates.DetectNow()
+
+Write-Host "WSUS server configuration updated successfully."
