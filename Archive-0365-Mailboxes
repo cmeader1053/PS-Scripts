@@ -1,0 +1,68 @@
+# Description:  Powershell script to archive TERMINATED employees O365 mailboxes exporting them to a PST file
+
+# Get Primary Domain Controller (PDC) Server
+$pdc=(Get-ADForest |Select-Object -ExpandProperty RootDomain |Get-ADDomain |Select-Object -Property PDCEmulator).PDCEmulator
+
+# Set Destination Varibales for Output Files
+$Root_Disk = "[enter_drive_letter_here]"
+$PSTArchive = "$($Root_Disk)\[enter_folder_name_here]"
+$SharePath = "\\[enter_share_drive_file_path_here]"
+
+if (!(Test-Path $PSTArchive)) {New-Item $PSTArchive -ItemType Directory}
+
+$Time= (Get-Date).ToString("yyyyMMddhhmm")
+
+# Set OU path to target employees
+$Terminated_Users_OU = "[enter_OU_path_here]"
+
+# Get terminanted users from AD with ExtendedAttribute4 set to null - 5 at a time
+$TerminatedUsers = Get-ADUser -Filter "enabled -eq $false -and extendedAttribute4 -eq $null" -SearchBase $Terminated_Users_OU | Select-Object -First 5 *
+
+# Connect to Exchange Online
+Import-Module ExchangeOnlineManagement
+
+$tenant_name = "[enter_tennant_name]"
+$app_id = "[enter_app_id]"
+$certificate_thumbprint = "[enter_certificate_thumbprint]"
+Connect-ExchangeOnline -CertificateThumbprint $certificate_thumbprint -AppId $app_id -Organization $tenant_name
+
+$connection_id = (Get-ConnectionInformation).ConnectionId
+
+# Loop through each terminated user
+foreach ($user in $TerminatedUsers) 
+{
+	# Use Try catch to check for emails
+	try {
+		Get-EXOMailbox -identity $user.UserPrincipalName -ErrorAction Stop
+		# Create PST file name with users UPN
+		$Formatted_User_Name = ($user.UserPrincipalName).Substring(0,($user.UserPrincipalName).indexof("@")-1)
+
+		# $PSTFileName = "$($user.UserPrincipalName.Replace("@","_"))_Archive.pst"
+		$PSTFileName = "$($Formatted_User_Name)_$($Time)_Archive.pst"
+		$PSTFilePath = Join-Path -Path $PSTPath -ChildPath $PSTFileName
+
+		# Export mailbox to PST file
+		try {
+			New-MailboxExportRequest -Mailbox $user.UserPrincipalName -FilePath $PSTFilePath -ErrorAction Stop
+			Set-ADObject -Identity $user.UserPrincipalName -Server $pdc -Replace @{extendedAttribute4 = "Exported"}
+		}
+		catch {
+			# Do not flag the user as Exported since the job didn't complete
+		}
+	}
+	catch {
+		# Flag the user for NoMailBox since it can't be found in exchange online
+		Set-ADObject -Identity $user.UserPrincipalName -Server $pdc -Replace @{extendedAttribute4 = "NoMailBox"}
+	}
+}
+
+# Move PST files to designated path
+$PSTs = Get-Childitem -Path $PSTArchive -File
+
+foreach($PST in $PSTs.FullName)
+{
+	Move-Item -Path $PST -Destination $SharePath -Force
+}
+
+# Disconnect from Exchange Online
+Disconnect-ExchangeOnline -ConnectionId $connection_id -Confirm:$false
